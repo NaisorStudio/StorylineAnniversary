@@ -47,6 +47,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
+import java.net.HttpURLConnection
 import java.net.URL
 import java.time.LocalDate
 import java.time.LocalDateTime
@@ -57,9 +58,9 @@ import java.util.Locale
 
 // 1. Configuración Global de la App
 object ConfigApp {
-    const val VERSION_LOCAL = "02.10.0608.2003"
-    // URL Raw permanente de tu Gist control-versionA.json
-    const val URL_JSON_CONFIG = "https://gist.githubusercontent.com/naisor/35ffbd135dfd92261679231a64774004/raw/226e4053c89d1a2e5c6704526176576fc2f9f948/control-versionA.json"
+    const val VERSION_LOCAL = "02.10.0608.2004"
+    // Endpoint REST API para evitar la caché de la CDN raw de GitHub Gist
+    const val URL_API_GIST = "https://api.github.com/gists/35ffbd135dfd92261679231a64774004"
 }
 
 // Modelo de Datos
@@ -193,33 +194,49 @@ fun CronogramaApp(
 
     SolicitarPermisoNotificaciones()
 
-    // Consulta del JSON en Gist para datos y control de versión (Anti-Caché)
+    // Consulta del JSON mediante la API REST de GitHub en lugar de URL Raw para evitar el caché
     LaunchedEffect(Unit) {
         withContext(Dispatchers.IO) {
             try {
-                // Se concatena un parámetro dinámico para eludir la caché de GitHub Raw
-                val urlSinCache = "${ConfigApp.URL_JSON_CONFIG}?nocache=${System.currentTimeMillis()}"
-                val respuestaJson = URL(urlSinCache).readText()
-                Log.d("DEBUG_VERSION", "JSON descargado -> $respuestaJson")
+                val url = URL(ConfigApp.URL_API_GIST)
+                val conexion = url.openConnection() as HttpURLConnection
 
-                val jsonObject = JSONObject(respuestaJson)
-                val versionMinima = jsonObject.optString("version_minima", ConfigApp.VERSION_LOCAL)
-                val urlApk = jsonObject.optString("url_apk", "")
-                val mensaje = jsonObject.optString("mensaje_bloqueo", "Hay una nueva versión disponible.")
+                // Deshabilitar la caché en Android y peticiones HTTP
+                conexion.useCaches = false
+                conexion.setDefaultUseCaches(false)
+                conexion.setRequestProperty("Cache-Control", "no-cache, no-store, must-revalidate")
+                conexion.setRequestProperty("Pragma", "no-cache")
+                conexion.setRequestProperty("Expires", "0")
 
-                val estaObsoleta = esVersionObsoleta(ConfigApp.VERSION_LOCAL, versionMinima)
-                Log.d("DEBUG_VERSION", "¿Requiere actualización?: $estaObsoleta")
+                conexion.connectTimeout = 5000
+                conexion.readTimeout = 5000
+                conexion.requestMethod = "GET"
 
-                if (estaObsoleta) {
-                    withContext(Dispatchers.Main) {
-                        mensajeBloqueo = mensaje
-                        urlDescargaApk = urlApk
-                        requiereActualizarApk = true
-                    }
-                } else {
+                val respuestaCode = conexion.responseCode
+
+                if (respuestaCode == 200) {
+                    val respuestaRaw = conexion.inputStream.bufferedReader().use { it.readText() }
+
+                    // Extraer el JSON real embebido dentro de la respuesta de la API REST de GitHub
+                    val jsonGistApi = JSONObject(respuestaRaw)
+                    val filesObject = jsonGistApi.getJSONObject("files")
+                    val nombreArchivo = filesObject.keys().next()
+                    val contenidoString = filesObject.getJSONObject(nombreArchivo).getString("content")
+
+                    val jsonObject = JSONObject(contenidoString)
+
+                    // 1. EVALUAR VERSIÓN Y BLOQUEO DE APK
+                    val versionMinima = jsonObject.optString("version_minima", ConfigApp.VERSION_LOCAL)
+                    val urlApk = jsonObject.optString("url_apk", "")
+                    val mensaje = jsonObject.optString("mensaje_bloqueo", "Hay una nueva versión disponible.")
+
+                    val estaObsoleta = esVersionObsoleta(ConfigApp.VERSION_LOCAL, versionMinima)
+
+                    // 2. PARSEAR ACTIVIDADES (Si existen en el JSON)
                     val arrayActividades = jsonObject.optJSONArray("actividades")
+                    val nuevasActividades = mutableListOf<Actividad>()
+
                     if (arrayActividades != null) {
-                        val nuevasActividades = mutableListOf<Actividad>()
                         val tf = DateTimeFormatter.ofPattern("HH:mm")
 
                         for (i in 0 until arrayActividades.length()) {
@@ -241,15 +258,26 @@ fun CronogramaApp(
                                 )
                             )
                         }
+                    }
 
-                        withContext(Dispatchers.Main) {
+                    // 3. ACTUALIZAR ESTADOS EN EL HILO PRINCIPAL
+                    withContext(Dispatchers.Main) {
+                        if (nuevasActividades.isNotEmpty()) {
                             actividades = nuevasActividades
                         }
+
+                        if (estaObsoleta) {
+                            mensajeBloqueo = mensaje
+                            urlDescargaApk = urlApk
+                            requiereActualizarApk = true
+                        }
                     }
+                } else {
+                    Log.e("DEBUG_VERSION", "Código de respuesta HTTP no esperado: $respuestaCode")
                 }
+                conexion.disconnect()
             } catch (e: Exception) {
-                Log.e("DEBUG_VERSION", "Error consultando el JSON: ${e.message}")
-                e.printStackTrace()
+                Log.e("DEBUG_VERSION", "Error al procesar JSON desde la API REST: ${e.message}")
             }
         }
     }
