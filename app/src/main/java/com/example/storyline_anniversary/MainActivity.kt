@@ -56,7 +56,7 @@ import java.util.Locale
 
 // 1. Configuración Global de la App
 object ConfigApp {
-    const val VERSION_LOCAL = "02.10.0608.2003"
+    const val VERSION_LOCAL = "02.10.0608.2004"
     // URL Raw permanente de tu Gist control-versionA.json
     const val URL_JSON_CONFIG = "https://gist.githubusercontent.com/naisor/35ffbd135dfd92261679231a64774004/raw/control-versionA.json"
 }
