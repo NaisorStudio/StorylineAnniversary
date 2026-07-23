@@ -9,6 +9,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -56,9 +57,9 @@ import java.util.Locale
 
 // 1. Configuración Global de la App
 object ConfigApp {
-    const val VERSION_LOCAL = "02.10.0608.2004"
+    const val VERSION_LOCAL = "02.10.0608.2003"
     // URL Raw permanente de tu Gist control-versionA.json
-    const val URL_JSON_CONFIG = "https://gist.githubusercontent.com/naisor/35ffbd135dfd92261679231a64774004/raw/control-versionA.json"
+    const val URL_JSON_CONFIG = "https://gist.githubusercontent.com/naisor/35ffbd135dfd92261679231a64774004/raw/226e4053c89d1a2e5c6704526176576fc2f9f948/control-versionA.json"
 }
 
 // Modelo de Datos
@@ -120,13 +121,24 @@ fun crearArchivoImagenTemporal(context: Context): Uri {
     )
 }
 
-// Comparación de Versiones
+// Comparación de Versiones Robusta (Compara bloque por bloque)
 fun esVersionObsoleta(versionLocal: String, versionServidor: String): Boolean {
+    Log.d("DEBUG_VERSION", "Local: '$versionLocal' | Servidor: '$versionServidor'")
     return try {
-        val localNum = versionLocal.replace(".", "").toLong()
-        val servidorNum = versionServidor.replace(".", "").toLong()
-        localNum < servidorNum
+        val partesLocal = versionLocal.split(".").map { it.toIntOrNull() ?: 0 }
+        val partesServidor = versionServidor.split(".").map { it.toIntOrNull() ?: 0 }
+
+        val maxLength = maxOf(partesLocal.size, partesServidor.size)
+        for (i in 0 until maxLength) {
+            val numLocal = partesLocal.getOrElse(i) { 0 }
+            val numServidor = partesServidor.getOrElse(i) { 0 }
+
+            if (numLocal < numServidor) return true
+            if (numLocal > numServidor) return false
+        }
+        false
     } catch (e: Exception) {
+        Log.e("DEBUG_VERSION", "Error al comparar versiones: ${e.message}")
         false
     }
 }
@@ -181,18 +193,24 @@ fun CronogramaApp(
 
     SolicitarPermisoNotificaciones()
 
-    // Consulta del JSON en Gist para datos y control de versión
+    // Consulta del JSON en Gist para datos y control de versión (Anti-Caché)
     LaunchedEffect(Unit) {
         withContext(Dispatchers.IO) {
             try {
-                val respuestaJson = URL(ConfigApp.URL_JSON_CONFIG).readText()
-                val jsonObject = JSONObject(respuestaJson)
+                // Se concatena un parámetro dinámico para eludir la caché de GitHub Raw
+                val urlSinCache = "${ConfigApp.URL_JSON_CONFIG}?nocache=${System.currentTimeMillis()}"
+                val respuestaJson = URL(urlSinCache).readText()
+                Log.d("DEBUG_VERSION", "JSON descargado -> $respuestaJson")
 
+                val jsonObject = JSONObject(respuestaJson)
                 val versionMinima = jsonObject.optString("version_minima", ConfigApp.VERSION_LOCAL)
                 val urlApk = jsonObject.optString("url_apk", "")
                 val mensaje = jsonObject.optString("mensaje_bloqueo", "Hay una nueva versión disponible.")
 
-                if (esVersionObsoleta(ConfigApp.VERSION_LOCAL, versionMinima)) {
+                val estaObsoleta = esVersionObsoleta(ConfigApp.VERSION_LOCAL, versionMinima)
+                Log.d("DEBUG_VERSION", "¿Requiere actualización?: $estaObsoleta")
+
+                if (estaObsoleta) {
                     withContext(Dispatchers.Main) {
                         mensajeBloqueo = mensaje
                         urlDescargaApk = urlApk
@@ -230,6 +248,7 @@ fun CronogramaApp(
                     }
                 }
             } catch (e: Exception) {
+                Log.e("DEBUG_VERSION", "Error consultando el JSON: ${e.message}")
                 e.printStackTrace()
             }
         }
