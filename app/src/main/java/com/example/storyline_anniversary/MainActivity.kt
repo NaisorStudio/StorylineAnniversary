@@ -2,14 +2,18 @@ package com.example.storyline_anniversary
 
 import android.annotation.SuppressLint
 import android.app.AlarmManager
+import android.app.DownloadManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.database.Cursor
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
 import android.provider.Settings
 import android.util.Log
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -44,6 +48,7 @@ import coil.compose.AsyncImage
 import com.example.storyline_anniversary.ui.theme.StorylineAnniversaryTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
@@ -58,8 +63,7 @@ import java.util.Locale
 
 // 1. Configuración Global de la App
 object ConfigApp {
-    const val VERSION_LOCAL = "02.10.0608.2004"
-    // Endpoint REST API para evitar la caché de la CDN raw de GitHub Gist
+    const val VERSION_LOCAL = "02.10.0608.2003"
     const val URL_API_GIST = "https://api.github.com/gists/35ffbd135dfd92261679231a64774004"
 }
 
@@ -122,9 +126,8 @@ fun crearArchivoImagenTemporal(context: Context): Uri {
     )
 }
 
-// Comparación de Versiones Robusta (Compara bloque por bloque)
+// Comparación de Versiones Robusta
 fun esVersionObsoleta(versionLocal: String, versionServidor: String): Boolean {
-    Log.d("DEBUG_VERSION", "Local: '$versionLocal' | Servidor: '$versionServidor'")
     return try {
         val partesLocal = versionLocal.split(".").map { it.toIntOrNull() ?: 0 }
         val partesServidor = versionServidor.split(".").map { it.toIntOrNull() ?: 0 }
@@ -144,7 +147,7 @@ fun esVersionObsoleta(versionLocal: String, versionServidor: String): Boolean {
     }
 }
 
-// Conversor de Color Hexadecimal
+// Conversor de Color Hexadecimal flexible
 fun parseColorHex(hex: String): Color {
     return try {
         val cleaned = hex.removePrefix("#")
@@ -157,6 +160,117 @@ fun parseColorHex(hex: String): Color {
     } catch (e: Exception) {
         Color.White
     }
+}
+
+// Lógica de Descarga Nativa con DownloadManager e Instalación Directa
+suspend fun descargarEInstalarApk(
+    context: Context,
+    urlApk: String,
+    onProgreso: (Float) -> Unit,
+    onCompletado: (Uri) -> Unit,
+    onError: (String) -> Unit
+) {
+    withContext(Dispatchers.IO) {
+        try {
+            val directorioDestino = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
+                ?: context.getExternalFilesDir(null)
+
+            val archivoApk = File(directorioDestino, "StoryAnniversary.apk")
+            if (archivoApk.exists()) {
+                archivoApk.delete()
+            }
+
+            val uriDescarga = Uri.parse(urlApk)
+            val request = DownloadManager.Request(uriDescarga).apply {
+                setTitle("Descargando actualización")
+                setDescription("Descargando nueva versión de la aplicación...")
+                setMimeType("application/vnd.android.package-archive")
+                setAllowedNetworkTypes(DownloadManager.Request.NETWORK_WIFI or DownloadManager.Request.NETWORK_MOBILE)
+                setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                setDestinationUri(Uri.fromFile(archivoApk))
+            }
+
+            val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+            val downloadId = downloadManager.enqueue(request)
+
+            var descargando = true
+            var contadorTiempoEspera = 0
+
+            while (descargando) {
+                val query = DownloadManager.Query().setFilterById(downloadId)
+                val cursor: Cursor = downloadManager.query(query)
+
+                if (cursor.moveToFirst()) {
+                    val bytesDescargados = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR))
+                    val bytesTotales = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES))
+                    val estado = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
+
+                    if (bytesTotales > 0) {
+                        val progreso = bytesDescargados.toFloat() / bytesTotales.toFloat()
+                        withContext(Dispatchers.Main) {
+                            onProgreso(progreso)
+                        }
+                    }
+
+                    when (estado) {
+                        DownloadManager.STATUS_SUCCESSFUL -> {
+                            descargando = false
+                            val apkUri = FileProvider.getUriForFile(
+                                context,
+                                "${context.packageName}.provider",
+                                archivoApk
+                            )
+                            withContext(Dispatchers.Main) {
+                                onCompletado(apkUri)
+                            }
+                        }
+                        DownloadManager.STATUS_FAILED -> {
+                            descargando = false
+                            val razon = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_REASON))
+                            val mensajeDetalle = when (razon) {
+                                404 -> "Error 404: La URL del APK en el JSON no existe o no es pública."
+                                403 -> "Error 403: Acceso denegado al archivo APK."
+                                else -> "Error en la descarga. Código de razón: $razon"
+                            }
+                            withContext(Dispatchers.Main) {
+                                onError(mensajeDetalle)
+                            }
+                        }
+                        DownloadManager.STATUS_PENDING -> {
+                            contadorTiempoEspera++
+                            if (contadorTiempoEspera > 40) {
+                                descargando = false
+                                downloadManager.remove(downloadId)
+                                withContext(Dispatchers.Main) {
+                                    onError("La descarga no responde. Revisa la conexión o el enlace.")
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    descargando = false
+                    withContext(Dispatchers.Main) {
+                        onError("No se pudo obtener el estado de la descarga.")
+                    }
+                }
+                cursor.close()
+                delay(500)
+            }
+        } catch (e: Exception) {
+            Log.e("DEBUG_VERSION", "Error al descargar APK: ${e.message}")
+            withContext(Dispatchers.Main) {
+                onError("Excepción en la descarga: ${e.localizedMessage}")
+            }
+        }
+    }
+}
+
+fun lanzarInstalacionApk(context: Context, uriApk: Uri) {
+    val intent = Intent(Intent.ACTION_VIEW).apply {
+        setDataAndType(uriApk, "application/vnd.android.package-archive")
+        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION
+    }
+    context.startActivity(intent)
 }
 
 // 2. Composable Principal
@@ -172,12 +286,17 @@ fun CronogramaApp(
     val timeFormatter = DateTimeFormatter.ofPattern("hh:mm:ss a", Locale.getDefault())
     val dateFormatter = DateTimeFormatter.ofPattern("dd/MM/yyyy", Locale.getDefault())
 
-    // Estado para la Actualización Requerida
+    // Estados para la Actualización Nativa
     var requiereActualizarApk by remember { mutableStateOf(false) }
     var mensajeBloqueo by remember { mutableStateOf("") }
     var urlDescargaApk by remember { mutableStateOf("") }
+    var estaDescargando by remember { mutableStateOf(false) }
+    var progresoDescarga by remember { mutableFloatStateOf(0f) }
+    var apkListaParaInstalarUri by remember { mutableStateOf<Uri?>(null) }
 
-    // Actividades Predeterminadas (Fallback offline si no hay red)
+    val coroutineScope = rememberCoroutineScope()
+
+    // Actividades Predeterminadas
     fun actividadesPorDefecto(): List<Actividad> {
         return listOf(
             Actividad(1, LocalTime.of(8, 0), LocalTime.of(10, 0), "Preparar café y revisar pendientes", Color(0xFFFFEBEE), obtenerFotoUriDePrefs(context, 1)),
@@ -194,30 +313,29 @@ fun CronogramaApp(
 
     SolicitarPermisoNotificaciones()
 
-    // Consulta del JSON mediante la API REST de GitHub en lugar de URL Raw para evitar el caché
-    LaunchedEffect(Unit) {
+    // Función suspendida para consulta rápida sin caché
+    suspend fun consultarActualizaciones() {
         withContext(Dispatchers.IO) {
             try {
-                val url = URL(ConfigApp.URL_API_GIST)
+                // Parámetro dinámico para ignorar la caché CDN de GitHub
+                val urlConBuster = "${ConfigApp.URL_API_GIST}?t=${System.currentTimeMillis()}"
+                val url = URL(urlConBuster)
                 val conexion = url.openConnection() as HttpURLConnection
 
-                // Deshabilitar la caché en Android y peticiones HTTP
                 conexion.useCaches = false
                 conexion.setDefaultUseCaches(false)
                 conexion.setRequestProperty("Cache-Control", "no-cache, no-store, must-revalidate")
                 conexion.setRequestProperty("Pragma", "no-cache")
                 conexion.setRequestProperty("Expires", "0")
+                conexion.setRequestProperty("User-Agent", "Android-App")
 
-                conexion.connectTimeout = 5000
-                conexion.readTimeout = 5000
+                conexion.connectTimeout = 4000
+                conexion.readTimeout = 4000
                 conexion.requestMethod = "GET"
 
-                val respuestaCode = conexion.responseCode
-
-                if (respuestaCode == 200) {
+                if (conexion.responseCode == 200) {
                     val respuestaRaw = conexion.inputStream.bufferedReader().use { it.readText() }
 
-                    // Extraer el JSON real embebido dentro de la respuesta de la API REST de GitHub
                     val jsonGistApi = JSONObject(respuestaRaw)
                     val filesObject = jsonGistApi.getJSONObject("files")
                     val nombreArchivo = filesObject.keys().next()
@@ -225,25 +343,23 @@ fun CronogramaApp(
 
                     val jsonObject = JSONObject(contenidoString)
 
-                    // 1. EVALUAR VERSIÓN Y BLOQUEO DE APK
                     val versionMinima = jsonObject.optString("version_minima", ConfigApp.VERSION_LOCAL)
                     val urlApk = jsonObject.optString("url_apk", "")
                     val mensaje = jsonObject.optString("mensaje_bloqueo", "Hay una nueva versión disponible.")
 
                     val estaObsoleta = esVersionObsoleta(ConfigApp.VERSION_LOCAL, versionMinima)
 
-                    // 2. PARSEAR ACTIVIDADES (Si existen en el JSON)
                     val arrayActividades = jsonObject.optJSONArray("actividades")
                     val nuevasActividades = mutableListOf<Actividad>()
 
                     if (arrayActividades != null) {
-                        val tf = DateTimeFormatter.ofPattern("HH:mm")
+                        val tf = DateTimeFormatter.ofPattern("H:mm")
 
                         for (i in 0 until arrayActividades.length()) {
                             val item = arrayActividades.getJSONObject(i)
                             val id = item.getInt("id")
-                            val inicio = LocalTime.parse(item.getString("horaInicio"), tf)
-                            val fin = LocalTime.parse(item.getString("horaFin"), tf)
+                            val inicio = LocalTime.parse(item.getString("horaInicio").trim(), tf)
+                            val fin = LocalTime.parse(item.getString("horaFin").trim(), tf)
                             val texto = item.getString("textoEspanol")
                             val color = parseColorHex(item.optString("colorHex", "#FFFFFF"))
 
@@ -260,10 +376,12 @@ fun CronogramaApp(
                         }
                     }
 
-                    // 3. ACTUALIZAR ESTADOS EN EL HILO PRINCIPAL
                     withContext(Dispatchers.Main) {
                         if (nuevasActividades.isNotEmpty()) {
                             actividades = nuevasActividades
+                            if (actividadEnFoco != null) {
+                                actividadEnFoco = actividades.find { it.id == actividadEnFoco?.id }
+                            }
                         }
 
                         if (estaObsoleta) {
@@ -272,13 +390,19 @@ fun CronogramaApp(
                             requiereActualizarApk = true
                         }
                     }
-                } else {
-                    Log.e("DEBUG_VERSION", "Código de respuesta HTTP no esperado: $respuestaCode")
                 }
                 conexion.disconnect()
             } catch (e: Exception) {
-                Log.e("DEBUG_VERSION", "Error al procesar JSON desde la API REST: ${e.message}")
+                Log.e("DEBUG_VERSION", "Error al sincronizar JSON: ${e.message}")
             }
+        }
+    }
+
+    // Consulta continua del JSON en segundo plano (cada 3 segundos)
+    LaunchedEffect(Unit) {
+        while (true) {
+            consultarActualizaciones()
+            delay(3000)
         }
     }
 
@@ -296,6 +420,9 @@ fun CronogramaApp(
 
     LaunchedEffect(Unit) {
         onRegistrarRecarga {
+            coroutineScope.launch {
+                consultarActualizaciones()
+            }
             if (actividadEnFoco != null) {
                 actividadEnFoco = actividades.find { it.id == actividadEnFoco?.id }
             }
@@ -317,7 +444,7 @@ fun CronogramaApp(
         }
     }
 
-    // Auto-selección de actividad en foco
+    // Actualizador de reloj
     LaunchedEffect(Unit) {
         while (true) {
             fechaHoraActual = LocalDateTime.now()
@@ -340,22 +467,69 @@ fun CronogramaApp(
         }
     }
 
-    // Diálogo emergente de Actualización Obligatoria
+    // DIÁLOGO DE ACTUALIZACIÓN NATIVA
     if (requiereActualizarApk) {
         AlertDialog(
-            onDismissRequest = { /* Deshabilitado */ },
-            title = { Text(text = "¡Actualización Requerida! 🚀") },
-            text = { Text(text = mensajeBloqueo) },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        if (urlDescargaApk.isNotEmpty()) {
-                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(urlDescargaApk))
-                            context.startActivity(intent)
-                        }
-                    }
+            onDismissRequest = { /* Bloqueado */ },
+            title = { Text(text = "¡Nueva versión disponible! 🚀") },
+            text = {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    Text("Actualizar Ahora")
+                    Text(text = mensajeBloqueo)
+
+                    if (estaDescargando) {
+                        Text(
+                            text = "Descargando: ${(progresoDescarga * 100).toInt()}%",
+                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold)
+                        )
+                        LinearProgressIndicator(
+                            progress = { progresoDescarga },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                if (apkListaParaInstalarUri != null) {
+                    Button(
+                        onClick = {
+                            lanzarInstalacionApk(context, apkListaParaInstalarUri!!)
+                        }
+                    ) {
+                        Text("Actualizar e Instalar")
+                    }
+                } else if (!estaDescargando) {
+                    Button(
+                        onClick = {
+                            if (urlDescargaApk.isNotEmpty()) {
+                                estaDescargando = true
+                                coroutineScope.launch {
+                                    descargarEInstalarApk(
+                                        context = context,
+                                        urlApk = urlDescargaApk,
+                                        onProgreso = { progreso ->
+                                            progresoDescarga = progreso
+                                        },
+                                        onCompletado = { uriApk ->
+                                            estaDescargando = false
+                                            apkListaParaInstalarUri = uriApk
+                                            lanzarInstalacionApk(context, uriApk)
+                                        },
+                                        onError = { mensajeError ->
+                                            estaDescargando = false
+                                            Toast.makeText(context, mensajeError, Toast.LENGTH_LONG).show()
+                                        }
+                                    )
+                                }
+                            } else {
+                                Toast.makeText(context, "La URL de descarga no es válida", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    ) {
+                        Text("Descargar actualización")
+                    }
                 }
             },
             properties = DialogProperties(
@@ -410,8 +584,9 @@ fun CronogramaApp(
             ) {
                 Spacer(modifier = Modifier.width(48.dp))
 
+                // TÍTULO DE LA APLICACIÓN DENTRO DE LA PANTALLA
                 Text(
-                    text = "Cronograma Especial",
+                    text = "Cronograma Primer Aniversario",
                     style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
                     color = colorTitulo,
                     textAlign = TextAlign.Center,
@@ -469,7 +644,6 @@ fun CronogramaApp(
                 }
             }
 
-            // Muestra de versión en la parte inferior
             Spacer(modifier = Modifier.height(8.dp))
             Text(
                 text = "v${ConfigApp.VERSION_LOCAL}",
