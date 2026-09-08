@@ -21,6 +21,8 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -33,9 +35,11 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
@@ -43,7 +47,9 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.DialogProperties
+import androidx.core.app.NotificationCompat
 import androidx.core.content.FileProvider
+import androidx.work.*
 import coil.compose.AsyncImage
 import com.example.storyline_anniversary.ui.theme.StorylineAnniversaryTheme
 import kotlinx.coroutines.Dispatchers
@@ -60,10 +66,11 @@ import java.time.LocalTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import java.util.concurrent.TimeUnit
 
 // 1. Configuración Global de la App
 object ConfigApp {
-    const val VERSION_LOCAL = "02.10.0608.2003"
+    const val VERSION_LOCAL = "02.10.0608.2004"
     const val URL_API_GIST = "https://api.github.com/gists/35ffbd135dfd92261679231a64774004"
 }
 
@@ -77,21 +84,144 @@ data class Actividad(
     val fotoUri: Uri? = null
 )
 
+// Programación de la verificación periódica (WorkManager)
+fun programarVerificacionSegundoPlano(context: Context) {
+    val restricciones = Constraints.Builder()
+        .setRequiredNetworkType(NetworkType.CONNECTED)
+        .build()
+
+    val trabajoVerificacion = PeriodicWorkRequestBuilder<VerificadorVersionWorker>(15, TimeUnit.MINUTES)
+        .setConstraints(restricciones)
+        .build()
+
+    WorkManager.getInstance(context).enqueueUniquePeriodicWork(
+        "VerificadorVersionPeriodico",
+        ExistingPeriodicWorkPolicy.KEEP,
+        trabajoVerificacion
+    )
+}
+
+// 2. Pantalla Splash Animada Estilo Waze (5 segundos)
+@Composable
+fun SplashScreenMistico(onAnimacionTerminada: () -> Unit) {
+    val scale = remember { Animatable(0.5f) }
+    val alpha = remember { Animatable(0f) }
+
+    LaunchedEffect(key1 = true) {
+        launch {
+            alpha.animateTo(
+                targetValue = 1f,
+                animationSpec = tween(durationMillis = 1000, easing = FastOutSlowInEasing)
+            )
+        }
+        launch {
+            scale.animateTo(
+                targetValue = 1.1f,
+                animationSpec = tween(durationMillis = 1000, easing = FastOutSlowInEasing)
+            )
+            scale.animateTo(
+                targetValue = 1.0f,
+                animationSpec = tween(durationMillis = 600, easing = LinearOutSlowInEasing)
+            )
+        }
+
+        delay(5000)
+        onAnimacionTerminada()
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Image(
+                painter = painterResource(id = R.drawable.logo),
+                contentDescription = "Logo Naisor Studio",
+                modifier = Modifier
+                    .size(110.dp)
+                    .scale(scale.value)
+                    .alpha(alpha.value)
+            )
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            Text(
+                text = "Cronograma Primer Aniversario",
+                style = MaterialTheme.typography.titleMedium.copy(
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 20.sp
+                ),
+                color = MaterialTheme.colorScheme.onBackground,
+                modifier = Modifier.alpha(alpha.value)
+            )
+
+            Spacer(modifier = Modifier.height(6.dp))
+
+            Text(
+                text = "Naisor Studio © 2026",
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium
+                ),
+                color = MaterialTheme.colorScheme.outline,
+                modifier = Modifier.alpha(alpha.value)
+            )
+
+            Text(
+                text = "v${ConfigApp.VERSION_LOCAL}",
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Light
+                ),
+                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.7f),
+                modifier = Modifier.alpha(alpha.value)
+            )
+        }
+    }
+}
+
+// 3. Actividad Principal
 class MainActivity : ComponentActivity() {
     private var recargarFotosCallback by mutableStateOf({})
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        setTheme(R.style.Theme_StorylineAnniversary)
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+
+        // Activar la verificación periódica de actualizaciones en segundo plano
+        programarVerificacionSegundoPlano(this)
+
         setContent {
             StorylineAnniversaryTheme {
+                var mostrandoSplash by remember { mutableStateOf(true) }
+
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    CronogramaApp(
-                        modifier = Modifier.padding(innerPadding),
-                        onRegistrarRecarga = { callback ->
-                            recargarFotosCallback = callback
+                    Crossfade(
+                        targetState = mostrandoSplash,
+                        animationSpec = tween(durationMillis = 800),
+                        label = "TransicionSplashMain"
+                    ) { enSplash ->
+                        if (enSplash) {
+                            SplashScreenMistico(
+                                onAnimacionTerminada = {
+                                    mostrandoSplash = false
+                                }
+                            )
+                        } else {
+                            CronogramaApp(
+                                modifier = Modifier.padding(innerPadding),
+                                onRegistrarRecarga = { callback ->
+                                    recargarFotosCallback = callback
+                                }
+                            )
                         }
-                    )
+                    }
                 }
             }
         }
@@ -101,9 +231,22 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         recargarFotosCallback()
     }
+
+    override fun onStop() {
+        super.onStop()
+        val trabajoUnico = OneTimeWorkRequestBuilder<VerificadorVersionWorker>()
+            .setConstraints(
+                Constraints.Builder()
+                    .setRequiredNetworkType(NetworkType.CONNECTED)
+                    .build()
+            )
+            .build()
+
+        WorkManager.getInstance(this).enqueue(trabajoUnico)
+    }
 }
 
-// Persistencia en SharedPreferences
+// Utilidades y Funciones de Persistencia
 fun guardarFotoUriEnPrefs(context: Context, idActividad: Int, uri: Uri) {
     val prefs = context.getSharedPreferences("storyline_prefs", Context.MODE_PRIVATE)
     prefs.edit().putString("foto_actividad_$idActividad", uri.toString()).apply()
@@ -126,7 +269,6 @@ fun crearArchivoImagenTemporal(context: Context): Uri {
     )
 }
 
-// Comparación de Versiones Robusta
 fun esVersionObsoleta(versionLocal: String, versionServidor: String): Boolean {
     return try {
         val partesLocal = versionLocal.split(".").map { it.toIntOrNull() ?: 0 }
@@ -147,7 +289,6 @@ fun esVersionObsoleta(versionLocal: String, versionServidor: String): Boolean {
     }
 }
 
-// Conversor de Color Hexadecimal flexible
 fun parseColorHex(hex: String): Color {
     return try {
         val cleaned = hex.removePrefix("#")
@@ -162,7 +303,6 @@ fun parseColorHex(hex: String): Color {
     }
 }
 
-// Lógica de Descarga Nativa con DownloadManager e Instalación Directa
 suspend fun descargarEInstalarApk(
     context: Context,
     urlApk: String,
@@ -228,9 +368,9 @@ suspend fun descargarEInstalarApk(
                             descargando = false
                             val razon = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_REASON))
                             val mensajeDetalle = when (razon) {
-                                404 -> "Error 404: La URL del APK en el JSON no existe o no es pública."
-                                403 -> "Error 403: Acceso denegado al archivo APK."
-                                else -> "Error en la descarga. Código de razón: $razon"
+                                404 -> "Error 404: La URL del APK no existe."
+                                403 -> "Error 403: Acceso denegado al APK."
+                                else -> "Error en la descarga. Código: $razon"
                             }
                             withContext(Dispatchers.Main) {
                                 onError(mensajeDetalle)
@@ -242,7 +382,7 @@ suspend fun descargarEInstalarApk(
                                 descargando = false
                                 downloadManager.remove(downloadId)
                                 withContext(Dispatchers.Main) {
-                                    onError("La descarga no responde. Revisa la conexión o el enlace.")
+                                    onError("La descarga no responde. Revisa la conexión.")
                                 }
                             }
                         }
@@ -273,7 +413,7 @@ fun lanzarInstalacionApk(context: Context, uriApk: Uri) {
     context.startActivity(intent)
 }
 
-// 2. Composable Principal
+// 4. Composable Principal de la Aplicación
 @Composable
 fun CronogramaApp(
     modifier: Modifier = Modifier,
@@ -281,12 +421,11 @@ fun CronogramaApp(
 ) {
     val context = LocalContext.current
     var fechaHoraActual by remember { mutableStateOf(LocalDateTime.now()) }
-    val fechaEvento = remember { LocalDate.of(2026, 10, 25) }
+    val fechaEvento = remember { LocalDate.of(2026, 9, 8) }
 
     val timeFormatter = DateTimeFormatter.ofPattern("hh:mm:ss a", Locale.getDefault())
     val dateFormatter = DateTimeFormatter.ofPattern("dd/MM/yyyy", Locale.getDefault())
 
-    // Estados para la Actualización Nativa
     var requiereActualizarApk by remember { mutableStateOf(false) }
     var mensajeBloqueo by remember { mutableStateOf("") }
     var urlDescargaApk by remember { mutableStateOf("") }
@@ -296,12 +435,11 @@ fun CronogramaApp(
 
     val coroutineScope = rememberCoroutineScope()
 
-    // Actividades Predeterminadas
     fun actividadesPorDefecto(): List<Actividad> {
         return listOf(
             Actividad(1, LocalTime.of(8, 0), LocalTime.of(10, 0), "Preparar café y revisar pendientes", Color(0xFFFFEBEE), obtenerFotoUriDePrefs(context, 1)),
             Actividad(2, LocalTime.of(10, 0), LocalTime.of(14, 0), "Avanzar en el código de la aplicación", Color(0xFFE3F2FD), obtenerFotoUriDePrefs(context, 2)),
-            Actividad(3, LocalTime.of(14, 0), LocalTime.of(18, 0), "Diseño de interfaz y pruebas en Android", Color(0xFFE8F5E9), obtenerFotoUriDePrefs(context, 3)),
+            Actividad(3, LocalTime.of(15, 0), LocalTime.of(18, 0), "Diseño de interfaz y pruebas en Android", Color(0xFFE8F5E9), obtenerFotoUriDePrefs(context, 3)),
             Actividad(4, LocalTime.of(18, 0), LocalTime.of(22, 0), "Tiempo libre / Descanso", Color(0xFFF3E5F5), obtenerFotoUriDePrefs(context, 4))
         )
     }
@@ -313,11 +451,9 @@ fun CronogramaApp(
 
     SolicitarPermisoNotificaciones()
 
-    // Función suspendida para consulta rápida sin caché
     suspend fun consultarActualizaciones() {
         withContext(Dispatchers.IO) {
             try {
-                // Parámetro dinámico para ignorar la caché CDN de GitHub
                 val urlConBuster = "${ConfigApp.URL_API_GIST}?t=${System.currentTimeMillis()}"
                 val url = URL(urlConBuster)
                 val conexion = url.openConnection() as HttpURLConnection
@@ -398,7 +534,6 @@ fun CronogramaApp(
         }
     }
 
-    // Consulta continua del JSON en segundo plano (cada 3 segundos)
     LaunchedEffect(Unit) {
         while (true) {
             consultarActualizaciones()
@@ -406,7 +541,6 @@ fun CronogramaApp(
         }
     }
 
-    // Programación de Notificaciones
     LaunchedEffect(actividades) {
         actividades.forEach { actividad ->
             programarNotificacionCincoMinutosAntes(
@@ -444,7 +578,6 @@ fun CronogramaApp(
         }
     }
 
-    // Actualizador de reloj
     LaunchedEffect(Unit) {
         while (true) {
             fechaHoraActual = LocalDateTime.now()
@@ -467,11 +600,10 @@ fun CronogramaApp(
         }
     }
 
-    // DIÁLOGO DE ACTUALIZACIÓN NATIVA
     if (requiereActualizarApk) {
         AlertDialog(
-            onDismissRequest = { /* Bloqueado */ },
-            title = { Text(text = "¡Nueva versión disponible! 🚀") },
+            onDismissRequest = { },
+            title = { Text(text = "¡Nueva versión disponible!") },
             text = {
                 Column(
                     modifier = Modifier.fillMaxWidth(),
@@ -584,7 +716,6 @@ fun CronogramaApp(
             ) {
                 Spacer(modifier = Modifier.width(48.dp))
 
-                // TÍTULO DE LA APLICACIÓN DENTRO DE LA PANTALLA
                 Text(
                     text = "Cronograma Primer Aniversario",
                     style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
@@ -645,21 +776,47 @@ fun CronogramaApp(
             }
 
             Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = "v${ConfigApp.VERSION_LOCAL}",
-                style = MaterialTheme.typography.labelSmall.copy(
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Light
-                ),
-                color = colorSubtitulo,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth()
-            )
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 4.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    Image(
+                        painter = painterResource(id = R.drawable.logo),
+                        contentDescription = "Logo Naisor Studio",
+                        modifier = Modifier.size(44.dp)
+                    )
+
+                    Text(
+                        text = "Naisor Studio © 2026",
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium
+                        ),
+                        color = colorSubtitulo
+                    )
+
+                    Text(
+                        text = "v${ConfigApp.VERSION_LOCAL}",
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Light
+                        ),
+                        color = colorSubtitulo
+                    )
+                }
+            }
         }
     }
 }
 
-// 3. Tarjeta de Actividad
+// Componente Tarjeta de Actividad
 @Composable
 fun ActividadCard(
     actividad: Actividad,
@@ -739,7 +896,7 @@ fun ActividadCard(
     }
 }
 
-// 4. Animación Mística
+// Animación Mística
 @Composable
 fun EfectoRevelarMistico(
     revelado: Boolean,
@@ -775,7 +932,7 @@ fun EfectoRevelarMistico(
     }
 }
 
-// 5. Idioma Místico
+// Idioma Místico
 fun generarTextoFicticio(original: String): String {
     return original.map { char ->
         when (char) {
@@ -793,13 +950,13 @@ fun generarTextoFicticio(original: String): String {
     }.joinToString("")
 }
 
-// 6. Notificaciones
+// Permisos y Notificaciones Nativa
 @Composable
 fun SolicitarPermisoNotificaciones() {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
         val launcher = rememberLauncherForActivityResult(
             contract = ActivityResultContracts.RequestPermission(),
-            onResult = { _ -> }
+            onResult = { }
         )
         LaunchedEffect(Unit) {
             launcher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
@@ -829,7 +986,7 @@ fun programarNotificacionCincoMinutosAntes(
 
         val intent = Intent(context, NotificacionReceiver::class.java).apply {
             putExtra("TITULO", "¡Próxima Actividad!")
-            putExtra("MENSAJE", "En 5 minutos comienza una nueva actividad, entra a la app para descubrir cuál será 😎")
+            putExtra("MENSAJE", "En 5 minutos comienza una nueva actividad, entra a la app para descubrir cuál será")
             putExtra("ID_ACTIVIDAD", idActividad)
         }
 
@@ -862,6 +1019,7 @@ fun programarNotificacionCincoMinutosAntes(
         e.printStackTrace()
     }
 }
+
 
 @Preview(showBackground = true)
 @Composable

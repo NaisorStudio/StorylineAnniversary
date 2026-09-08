@@ -2,52 +2,63 @@ package com.example.storyline_anniversary
 
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.BroadcastReceiver
+import android.content.ContentResolver
 import android.content.Context
 import android.content.Intent
-import android.media.RingtoneManager
+import android.media.AudioAttributes
+import android.net.Uri
 import android.os.Build
 import androidx.core.app.NotificationCompat
 
 class NotificacionReceiver : BroadcastReceiver() {
-
     override fun onReceive(context: Context, intent: Intent) {
-        val titulo = intent.getStringExtra("TITULO") ?: "Próxima Actividad"
-        val mensaje = intent.getStringExtra("MENSAJE") ?: "Tu actividad comenzará en 5 minutos ⏰"
+        val titulo = intent.getStringExtra("TITULO") ?: "Notificación"
+        val mensaje = intent.getStringExtra("MENSAJE") ?: ""
         val idActividad = intent.getIntExtra("ID_ACTIVIDAD", 0)
 
-        mostrarNotificacion(context, titulo, mensaje, idActividad)
-    }
-
-    private fun mostrarNotificacion(context: Context, titulo: String, mensaje: String, idNotificacion: Int) {
-        val channelId = "canal_cronograma_aniversario"
+        val canalId = "canal_actividades_aniversario_v2"
         val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
-        // Crear canal de notificación (Requerido para Android 8.0+)
+        val sonidoUri = Uri.parse("${ContentResolver.SCHEME_ANDROID_RESOURCE}://${context.packageName}/${R.raw.imyour}")
+
+        val audioAttributes = AudioAttributes.Builder()
+            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+            .setUsage(AudioAttributes.USAGE_NOTIFICATION)
+            .build()
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val sonidoUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
             val canal = NotificationChannel(
-                channelId,
-                "Recordatorios del Cronograma",
+                canalId,
+                "Notificaciones de Cronograma",
                 NotificationManager.IMPORTANCE_HIGH
             ).apply {
-                description = "Notificaciones para actividades a punto de iniciar"
-                setSound(sonidoUri, null)
-                enableVibration(true)
+                setSound(sonidoUri, audioAttributes)
             }
             notificationManager.createNotificationChannel(canal)
         }
 
-        val sonidoPredeterminado = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+        val intentAbrirApp = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
 
-        val builder = NotificationCompat.Builder(context, channelId)
-            .setSmallIcon(android.R.drawable.ic_dialog_info) // Reemplaza por tu ícono si prefieres
+        val pendingIntent = PendingIntent.getActivity(
+            context,
+            idActividad,
+            intentAbrirApp,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val builder = NotificationCompat.Builder(context, canalId)
+            .setSmallIcon(R.drawable.logo)
             .setContentTitle(titulo)
             .setContentText(mensaje)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setSound(sonidoPredeterminado)
+            .setSound(sonidoUri)
+            .setContentIntent(pendingIntent)
             .setAutoCancel(true)
 
-        notificationManager.notify(idNotificacion, builder.build())
+        notificationManager.notify(idActividad, builder.build())
     }
 }
