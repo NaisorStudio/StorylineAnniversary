@@ -4,8 +4,10 @@ import android.annotation.SuppressLint
 import android.app.AlarmManager
 import android.app.DownloadManager
 import android.app.PendingIntent
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.database.Cursor
 import android.net.Uri
 import android.os.Build
@@ -47,7 +49,6 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.DialogProperties
-import androidx.core.app.NotificationCompat
 import androidx.core.content.FileProvider
 import androidx.work.*
 import coil.compose.AsyncImage
@@ -60,6 +61,7 @@ import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
+import java.time.Duration
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.LocalTime
@@ -70,8 +72,9 @@ import java.util.concurrent.TimeUnit
 
 // 1. Configuración Global de la App
 object ConfigApp {
-    const val VERSION_LOCAL = "02.10.0608.2004"
+    const val VERSION_LOCAL = "02.10.0608.2026"
     const val URL_API_GIST = "https://api.github.com/gists/35ffbd135dfd92261679231a64774004"
+    val FECHA_OBJETIVO_GIST: LocalDateTime = LocalDateTime.of(2026, 10, 25, 0, 0, 15)
 }
 
 // Modelo de Datos
@@ -83,6 +86,50 @@ data class Actividad(
     val colorFondoApp: Color,
     val fotoUri: Uri? = null
 )
+
+// Gestión dinámica de Nombre e Ícono vía Activity-Alias
+fun actualizarIconoYNombreApp(context: Context, versionLocal: String) {
+    try {
+        val pm = context.packageManager
+        val esVersion2003 = versionLocal == "02.10.0608.2003"
+
+        val aliasDefault = ComponentName(context, "${context.packageName}.MainActivityDefault")
+        val aliasTimer = ComponentName(context, "${context.packageName}.MainActivityTimer")
+
+        val estadoTimerActual = pm.getComponentEnabledSetting(aliasTimer)
+        val estadoDefaultActual = pm.getComponentEnabledSetting(aliasDefault)
+
+        if (esVersion2003) {
+            if (estadoTimerActual != PackageManager.COMPONENT_ENABLED_STATE_ENABLED) {
+                pm.setComponentEnabledSetting(
+                    aliasTimer,
+                    PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
+                    PackageManager.SYNCHRONOUS
+                )
+                pm.setComponentEnabledSetting(
+                    aliasDefault,
+                    PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
+                    PackageManager.SYNCHRONOUS
+                )
+            }
+        } else {
+            if (estadoDefaultActual != PackageManager.COMPONENT_ENABLED_STATE_ENABLED) {
+                pm.setComponentEnabledSetting(
+                    aliasDefault,
+                    PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
+                    PackageManager.SYNCHRONOUS
+                )
+                pm.setComponentEnabledSetting(
+                    aliasTimer,
+                    PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
+                    PackageManager.SYNCHRONOUS
+                )
+            }
+        }
+    } catch (e: Exception) {
+        Log.e("DEBUG_ALIAS", "Error al actualizar alias: ${e.message}")
+    }
+}
 
 // Programación de la verificación periódica (WorkManager)
 fun programarVerificacionSegundoPlano(context: Context) {
@@ -101,7 +148,7 @@ fun programarVerificacionSegundoPlano(context: Context) {
     )
 }
 
-// 2. Pantalla Splash Animada Estilo Waze (5 segundos)
+// 2. Pantalla Splash Animada
 @Composable
 fun SplashScreenMistico(onAnimacionTerminada: () -> Unit) {
     val scale = remember { Animatable(0.5f) }
@@ -194,33 +241,28 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        // Activar la verificación periódica de actualizaciones en segundo plano
+        actualizarIconoYNombreApp(this, ConfigApp.VERSION_LOCAL)
         programarVerificacionSegundoPlano(this)
 
         setContent {
             StorylineAnniversaryTheme {
-                var mostrandoSplash by remember { mutableStateOf(true) }
+                val esVersionEspecial = ConfigApp.VERSION_LOCAL == "02.10.0608.2003"
+                var mostrandoSplash by remember { mutableStateOf(!esVersionEspecial) }
 
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    Crossfade(
-                        targetState = mostrandoSplash,
-                        animationSpec = tween(durationMillis = 800),
-                        label = "TransicionSplashMain"
-                    ) { enSplash ->
-                        if (enSplash) {
-                            SplashScreenMistico(
-                                onAnimacionTerminada = {
-                                    mostrandoSplash = false
-                                }
-                            )
-                        } else {
-                            CronogramaApp(
-                                modifier = Modifier.padding(innerPadding),
-                                onRegistrarRecarga = { callback ->
-                                    recargarFotosCallback = callback
-                                }
-                            )
-                        }
+                    if (mostrandoSplash) {
+                        SplashScreenMistico(
+                            onAnimacionTerminada = {
+                                mostrandoSplash = false
+                            }
+                        )
+                    } else {
+                        InterfazSegunVersion(
+                            modifier = Modifier.padding(innerPadding),
+                            onRegistrarRecarga = { callback ->
+                                recargarFotosCallback = callback
+                            }
+                        )
                     }
                 }
             }
@@ -413,34 +455,30 @@ fun lanzarInstalacionApk(context: Context, uriApk: Uri) {
     context.startActivity(intent)
 }
 
-// 4. Composable Principal de la Aplicación
+// 4. Composable Principal
 @Composable
 fun CronogramaApp(
     modifier: Modifier = Modifier,
+    actividadesActualizadas: List<Actividad>? = null,
     onRegistrarRecarga: (() -> Unit) -> Unit = {}
 ) {
     val context = LocalContext.current
     var fechaHoraActual by remember { mutableStateOf(LocalDateTime.now()) }
-    val fechaEvento = remember { LocalDate.of(2026, 9, 8) }
+    val fechaEvento = remember { LocalDate.of(2026, 10, 25) }
 
     val timeFormatter = DateTimeFormatter.ofPattern("hh:mm:ss a", Locale.getDefault())
     val dateFormatter = DateTimeFormatter.ofPattern("dd/MM/yyyy", Locale.getDefault())
 
-    var requiereActualizarApk by remember { mutableStateOf(false) }
-    var mensajeBloqueo by remember { mutableStateOf("") }
-    var urlDescargaApk by remember { mutableStateOf("") }
-    var estaDescargando by remember { mutableStateOf(false) }
-    var progresoDescarga by remember { mutableFloatStateOf(0f) }
-    var apkListaParaInstalarUri by remember { mutableStateOf<Uri?>(null) }
-
-    val coroutineScope = rememberCoroutineScope()
-
     fun actividadesPorDefecto(): List<Actividad> {
         return listOf(
-            Actividad(1, LocalTime.of(8, 0), LocalTime.of(10, 0), "Preparar café y revisar pendientes", Color(0xFFFFEBEE), obtenerFotoUriDePrefs(context, 1)),
-            Actividad(2, LocalTime.of(10, 0), LocalTime.of(14, 0), "Avanzar en el código de la aplicación", Color(0xFFE3F2FD), obtenerFotoUriDePrefs(context, 2)),
-            Actividad(3, LocalTime.of(15, 0), LocalTime.of(18, 0), "Diseño de interfaz y pruebas en Android", Color(0xFFE8F5E9), obtenerFotoUriDePrefs(context, 3)),
-            Actividad(4, LocalTime.of(18, 0), LocalTime.of(22, 0), "Tiempo libre / Descanso", Color(0xFFF3E5F5), obtenerFotoUriDePrefs(context, 4))
+            Actividad(1, LocalTime.of(8, 0), LocalTime.of(10, 0), "Desayunar con el amor de mi vida", Color(0xFFFFEBEE), obtenerFotoUriDePrefs(context, 1)),
+            Actividad(2, LocalTime.of(10, 1), LocalTime.of(11, 0), "Caminar con mi princesa preciosa en el valle escondido", Color(0xFFE8F5E9), obtenerFotoUriDePrefs(context, 2)),
+            Actividad(3, LocalTime.of(11, 1), LocalTime.of(12, 0), "El mejor almuerzo con mi esposa preciosa", Color(0xFFFFF3E0), obtenerFotoUriDePrefs(context, 3)),
+            Actividad(4, LocalTime.of(12, 1), LocalTime.of(14, 0), "Viajar con mi reina hermosa para tierras altas", Color(0xFFE3F2FD), obtenerFotoUriDePrefs(context, 4)),
+            Actividad(5, LocalTime.of(14, 1), LocalTime.of(16, 0), "Paseo en dualbicicleta con mi alma gemela", Color(0xFFF3E5F5), obtenerFotoUriDePrefs(context, 5)),
+            Actividad(6, LocalTime.of(16, 1), LocalTime.of(17, 45), "Viaje con mi muñequita hermosa hacia…", Color(0xFFFFF8E1), obtenerFotoUriDePrefs(context, 6)),
+            Actividad(7, LocalTime.of(17, 46), LocalTime.of(18, 30), "… la playa la Barquete para ver el atardecer", Color(0xFFE0F7FA), obtenerFotoUriDePrefs(context, 7)),
+            Actividad(8, LocalTime.of(18, 31), LocalTime.of(19, 30), "Cerrar con broche de oro, comer la pizza favorita de mi amada preciosa", Color(0xFFFCE4EC), obtenerFotoUriDePrefs(context, 8))
         )
     }
 
@@ -451,93 +489,12 @@ fun CronogramaApp(
 
     SolicitarPermisoNotificaciones()
 
-    suspend fun consultarActualizaciones() {
-        withContext(Dispatchers.IO) {
-            try {
-                val urlConBuster = "${ConfigApp.URL_API_GIST}?t=${System.currentTimeMillis()}"
-                val url = URL(urlConBuster)
-                val conexion = url.openConnection() as HttpURLConnection
-
-                conexion.useCaches = false
-                conexion.setDefaultUseCaches(false)
-                conexion.setRequestProperty("Cache-Control", "no-cache, no-store, must-revalidate")
-                conexion.setRequestProperty("Pragma", "no-cache")
-                conexion.setRequestProperty("Expires", "0")
-                conexion.setRequestProperty("User-Agent", "Android-App")
-
-                conexion.connectTimeout = 4000
-                conexion.readTimeout = 4000
-                conexion.requestMethod = "GET"
-
-                if (conexion.responseCode == 200) {
-                    val respuestaRaw = conexion.inputStream.bufferedReader().use { it.readText() }
-
-                    val jsonGistApi = JSONObject(respuestaRaw)
-                    val filesObject = jsonGistApi.getJSONObject("files")
-                    val nombreArchivo = filesObject.keys().next()
-                    val contenidoString = filesObject.getJSONObject(nombreArchivo).getString("content")
-
-                    val jsonObject = JSONObject(contenidoString)
-
-                    val versionMinima = jsonObject.optString("version_minima", ConfigApp.VERSION_LOCAL)
-                    val urlApk = jsonObject.optString("url_apk", "")
-                    val mensaje = jsonObject.optString("mensaje_bloqueo", "Hay una nueva versión disponible.")
-
-                    val estaObsoleta = esVersionObsoleta(ConfigApp.VERSION_LOCAL, versionMinima)
-
-                    val arrayActividades = jsonObject.optJSONArray("actividades")
-                    val nuevasActividades = mutableListOf<Actividad>()
-
-                    if (arrayActividades != null) {
-                        val tf = DateTimeFormatter.ofPattern("H:mm")
-
-                        for (i in 0 until arrayActividades.length()) {
-                            val item = arrayActividades.getJSONObject(i)
-                            val id = item.getInt("id")
-                            val inicio = LocalTime.parse(item.getString("horaInicio").trim(), tf)
-                            val fin = LocalTime.parse(item.getString("horaFin").trim(), tf)
-                            val texto = item.getString("textoEspanol")
-                            val color = parseColorHex(item.optString("colorHex", "#FFFFFF"))
-
-                            nuevasActividades.add(
-                                Actividad(
-                                    id = id,
-                                    horaInicio = inicio,
-                                    horaFin = fin,
-                                    textoEspanol = texto,
-                                    colorFondoApp = color,
-                                    fotoUri = obtenerFotoUriDePrefs(context, id)
-                                )
-                            )
-                        }
-                    }
-
-                    withContext(Dispatchers.Main) {
-                        if (nuevasActividades.isNotEmpty()) {
-                            actividades = nuevasActividades
-                            if (actividadEnFoco != null) {
-                                actividadEnFoco = actividades.find { it.id == actividadEnFoco?.id }
-                            }
-                        }
-
-                        if (estaObsoleta) {
-                            mensajeBloqueo = mensaje
-                            urlDescargaApk = urlApk
-                            requiereActualizarApk = true
-                        }
-                    }
-                }
-                conexion.disconnect()
-            } catch (e: Exception) {
-                Log.e("DEBUG_VERSION", "Error al sincronizar JSON: ${e.message}")
+    LaunchedEffect(actividadesActualizadas) {
+        if (!actividadesActualizadas.isNullOrEmpty()) {
+            actividades = actividadesActualizadas
+            if (actividadEnFoco != null) {
+                actividadEnFoco = actividades.find { it.id == actividadEnFoco?.id }
             }
-        }
-    }
-
-    LaunchedEffect(Unit) {
-        while (true) {
-            consultarActualizaciones()
-            delay(3000)
         }
     }
 
@@ -554,9 +511,6 @@ fun CronogramaApp(
 
     LaunchedEffect(Unit) {
         onRegistrarRecarga {
-            coroutineScope.launch {
-                consultarActualizaciones()
-            }
             if (actividadEnFoco != null) {
                 actividadEnFoco = actividades.find { it.id == actividadEnFoco?.id }
             }
@@ -598,77 +552,6 @@ fun CronogramaApp(
 
             delay(1000)
         }
-    }
-
-    if (requiereActualizarApk) {
-        AlertDialog(
-            onDismissRequest = { },
-            title = { Text(text = "¡Nueva versión disponible!") },
-            text = {
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Text(text = mensajeBloqueo)
-
-                    if (estaDescargando) {
-                        Text(
-                            text = "Descargando: ${(progresoDescarga * 100).toInt()}%",
-                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold)
-                        )
-                        LinearProgressIndicator(
-                            progress = { progresoDescarga },
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    }
-                }
-            },
-            confirmButton = {
-                if (apkListaParaInstalarUri != null) {
-                    Button(
-                        onClick = {
-                            lanzarInstalacionApk(context, apkListaParaInstalarUri!!)
-                        }
-                    ) {
-                        Text("Actualizar e Instalar")
-                    }
-                } else if (!estaDescargando) {
-                    Button(
-                        onClick = {
-                            if (urlDescargaApk.isNotEmpty()) {
-                                estaDescargando = true
-                                coroutineScope.launch {
-                                    descargarEInstalarApk(
-                                        context = context,
-                                        urlApk = urlDescargaApk,
-                                        onProgreso = { progreso ->
-                                            progresoDescarga = progreso
-                                        },
-                                        onCompletado = { uriApk ->
-                                            estaDescargando = false
-                                            apkListaParaInstalarUri = uriApk
-                                            lanzarInstalacionApk(context, uriApk)
-                                        },
-                                        onError = { mensajeError ->
-                                            estaDescargando = false
-                                            Toast.makeText(context, mensajeError, Toast.LENGTH_LONG).show()
-                                        }
-                                    )
-                                }
-                            } else {
-                                Toast.makeText(context, "La URL de descarga no es válida", Toast.LENGTH_SHORT).show()
-                            }
-                        }
-                    ) {
-                        Text("Descargar actualización")
-                    }
-                }
-            },
-            properties = DialogProperties(
-                dismissOnBackPress = false,
-                dismissOnClickOutside = false
-            )
-        )
     }
 
     val tieneFotoDeFondo = actividadEnFoco?.fotoUri != null
@@ -950,7 +833,7 @@ fun generarTextoFicticio(original: String): String {
     }.joinToString("")
 }
 
-// Permisos y Notificaciones Nativa
+// Permisos y Notificaciones
 @Composable
 fun SolicitarPermisoNotificaciones() {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -1020,11 +903,344 @@ fun programarNotificacionCincoMinutosAntes(
     }
 }
 
+// SEGMENTO CONDICIONAL Y PANTALLA TEMPORIZADOR
+@Composable
+fun InterfazSegunVersion(
+    modifier: Modifier = Modifier,
+    onRegistrarRecarga: (() -> Unit) -> Unit = {}
+) {
+    val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+
+    var requiereActualizarApk by remember { mutableStateOf(false) }
+    var mensajeBloqueo by remember { mutableStateOf("") }
+    var urlDescargaApk by remember { mutableStateOf("") }
+    var estaDescargando by remember { mutableStateOf(false) }
+    var progresoDescarga by remember { mutableFloatStateOf(0f) }
+    var apkListaParaInstalarUri by remember { mutableStateOf<Uri?>(null) }
+
+    var actividadesServidor by remember { mutableStateOf<List<Actividad>?>(null) }
+
+    suspend fun consultarActualizaciones() {
+        withContext(Dispatchers.IO) {
+            try {
+                val urlConBuster = "${ConfigApp.URL_API_GIST}?t=${System.currentTimeMillis()}"
+                val url = URL(urlConBuster)
+                val conexion = url.openConnection() as HttpURLConnection
+
+                conexion.useCaches = false
+                conexion.setDefaultUseCaches(false)
+                conexion.setRequestProperty("Cache-Control", "no-cache, no-store, must-revalidate")
+                conexion.setRequestProperty("Pragma", "no-cache")
+                conexion.setRequestProperty("Expires", "0")
+                conexion.setRequestProperty("User-Agent", "Android-App")
+
+                conexion.connectTimeout = 4000
+                conexion.readTimeout = 4000
+                conexion.requestMethod = "GET"
+
+                if (conexion.responseCode == 200) {
+                    val respuestaRaw = conexion.inputStream.bufferedReader().use { it.readText() }
+
+                    val jsonGistApi = JSONObject(respuestaRaw)
+                    val filesObject = jsonGistApi.getJSONObject("files")
+                    val nombreArchivo = filesObject.keys().next()
+                    val contenidoString = filesObject.getJSONObject(nombreArchivo).getString("content")
+
+                    val jsonObject = JSONObject(contenidoString)
+
+                    val versionMinima = jsonObject.optString("version_minima", ConfigApp.VERSION_LOCAL)
+                    val urlApk = jsonObject.optString("url_apk", "")
+                    val mensaje = jsonObject.optString("mensaje_bloqueo", "Hay una nueva versión disponible.")
+
+                    // Lee la fecha de activación si la agregas al JSON. Si no la incluyes, usa ConfigApp.FECHA_OBJETIVO_GIST por defecto.
+                    val fechaActivacionStr = jsonObject.optString("fecha_activacion_actualizacion", "")
+                    val fechaActivacion = try {
+                        if (fechaActivacionStr.isNotEmpty()) {
+                            LocalDateTime.parse(fechaActivacionStr)
+                        } else {
+                            ConfigApp.FECHA_OBJETIVO_GIST
+                        }
+                    } catch (e: Exception) {
+                        ConfigApp.FECHA_OBJETIVO_GIST
+                    }
+
+                    val estaObsoleta = esVersionObsoleta(ConfigApp.VERSION_LOCAL, versionMinima)
+                    val yaLlegoLaHora = !LocalDateTime.now().isBefore(fechaActivacion)
+
+                    val arrayActividades = jsonObject.optJSONArray("actividades")
+                    val nuevasActividades = mutableListOf<Actividad>()
+
+                    if (arrayActividades != null) {
+                        val tf = DateTimeFormatter.ofPattern("H:mm")
+
+                        for (i in 0 until arrayActividades.length()) {
+                            val item = arrayActividades.getJSONObject(i)
+                            val id = item.getInt("id")
+                            val inicio = LocalTime.parse(item.getString("horaInicio").trim(), tf)
+                            val fin = LocalTime.parse(item.getString("horaFin").trim(), tf)
+                            val texto = item.getString("textoEspanol")
+                            val color = parseColorHex(item.optString("colorHex", "#FFFFFF"))
+
+                            nuevasActividades.add(
+                                Actividad(
+                                    id = id,
+                                    horaInicio = inicio,
+                                    horaFin = fin,
+                                    textoEspanol = texto,
+                                    colorFondoApp = color,
+                                    fotoUri = obtenerFotoUriDePrefs(context, id)
+                                )
+                            )
+                        }
+                    }
+
+                    withContext(Dispatchers.Main) {
+                        if (nuevasActividades.isNotEmpty() && yaLlegoLaHora) {
+                            actividadesServidor = nuevasActividades
+                        }
+
+                        // Muestra el cuadro de dialogo de actualización solo si la versión local es menor
+                        // Y ADEMÁS ya transcurrió la fecha de activación especificada.
+                        if (estaObsoleta && yaLlegoLaHora) {
+                            mensajeBloqueo = mensaje
+                            urlDescargaApk = urlApk
+                            requiereActualizarApk = true
+                        }
+                    }
+                }
+                conexion.disconnect()
+            } catch (e: Exception) {
+                Log.e("DEBUG_VERSION", "Error al sincronizar JSON: ${e.message}")
+            }
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        while (true) {
+            consultarActualizaciones()
+            delay(3000)
+        }
+    }
+
+    val versionEspecialTemporizador = "02.10.0608.2003"
+    val soloMostrarTemporizador = ConfigApp.VERSION_LOCAL == versionEspecialTemporizador
+
+    Box(modifier = modifier.fillMaxSize()) {
+        if (soloMostrarTemporizador) {
+            PantallaSoloTemporizador()
+        } else {
+            CronogramaApp(
+                actividadesActualizadas = actividadesServidor,
+                onRegistrarRecarga = onRegistrarRecarga
+            )
+        }
+
+        if (requiereActualizarApk) {
+            AlertDialog(
+                onDismissRequest = { },
+                title = { Text(text = "¡Nueva versión disponible!") },
+                text = {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Text(text = mensajeBloqueo)
+
+                        if (estaDescargando) {
+                            Text(
+                                text = "Descargando: ${(progresoDescarga * 100).toInt()}%",
+                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold)
+                            )
+                            LinearProgressIndicator(
+                                progress = { progresoDescarga },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                    }
+                },
+                confirmButton = {
+                    if (apkListaParaInstalarUri != null) {
+                        Button(
+                            onClick = {
+                                lanzarInstalacionApk(context, apkListaParaInstalarUri!!)
+                            }
+                        ) {
+                            Text("Actualizar e Instalar")
+                        }
+                    } else if (!estaDescargando) {
+                        Button(
+                            onClick = {
+                                if (urlDescargaApk.isNotEmpty()) {
+                                    estaDescargando = true
+                                    coroutineScope.launch {
+                                        descargarEInstalarApk(
+                                            context = context,
+                                            urlApk = urlDescargaApk,
+                                            onProgreso = { progreso ->
+                                                progresoDescarga = progreso
+                                            },
+                                            onCompletado = { uriApk ->
+                                                estaDescargando = false
+                                                apkListaParaInstalarUri = uriApk
+                                                lanzarInstalacionApk(context, uriApk)
+                                            },
+                                            onError = { mensajeError ->
+                                                estaDescargando = false
+                                                Toast.makeText(context, mensajeError, Toast.LENGTH_LONG).show()
+                                            }
+                                        )
+                                    }
+                                } else {
+                                    Toast.makeText(context, "La URL de descarga no es válida", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        ) {
+                            Text("Descargar actualización")
+                        }
+                    }
+                },
+                properties = DialogProperties(
+                    dismissOnBackPress = false,
+                    dismissOnClickOutside = false
+                )
+            )
+        }
+    }
+}
+
+@Composable
+fun PantallaSoloTemporizador(
+    modifier: Modifier = Modifier
+) {
+    val fechaObjetivo = remember { ConfigApp.FECHA_OBJETIVO_GIST }
+    var tiempoRestante by remember { mutableStateOf(Duration.between(LocalDateTime.now(), fechaObjetivo)) }
+    var contadorFinalizado by remember { mutableStateOf(tiempoRestante.isNegative || tiempoRestante.isZero) }
+
+    LaunchedEffect(Unit) {
+        while (true) {
+            val ahora = LocalDateTime.now()
+            val duracion = Duration.between(ahora, fechaObjetivo)
+
+            if (duracion.isNegative || duracion.isZero) {
+                tiempoRestante = Duration.ZERO
+                contadorFinalizado = true
+            } else {
+                tiempoRestante = duracion
+            }
+            delay(1000)
+        }
+    }
+
+    val infiniteTransition = rememberInfiniteTransition(label = "EfectoPulsacionTemporizador")
+    val escalaAnimada by infiniteTransition.animateFloat(
+        initialValue = 0.92f,
+        targetValue = 1.08f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1000, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "EscalaLabelTemporizador"
+    )
+
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+            .padding(24.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(
+                text = "El GRAN ANIVERSARIO",
+                style = MaterialTheme.typography.headlineLarge.copy(
+                    fontWeight = FontWeight.ExtraBold,
+                    fontSize = 32.sp
+                ),
+                color = MaterialTheme.colorScheme.primary,
+                textAlign = TextAlign.Center
+            )
+
+            Spacer(modifier = Modifier.height(40.dp))
+
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier.scale(escalaAnimada)
+            ) {
+                if (!contadorFinalizado) {
+                    val dias = tiempoRestante.toDays()
+                    val horas = tiempoRestante.toHours() % 24
+                    val minutos = tiempoRestante.toMinutes() % 60
+                    val segundos = tiempoRestante.seconds % 60
+
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            text = String.format("%02dd : %02dh : %02dm : %02ds", dias, horas, minutos, segundos),
+                            style = MaterialTheme.typography.displayMedium.copy(
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 34.sp
+                            ),
+                            color = MaterialTheme.colorScheme.onBackground,
+                            textAlign = TextAlign.Center
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "Faltan para el evento",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.outline
+                        )
+                    }
+                } else {
+                    Text(
+                        text = "Es hora de actualizar al evento",
+                        style = MaterialTheme.typography.displaySmall.copy(
+                            fontWeight = FontWeight.Black,
+                            fontSize = 32.sp,
+                            lineHeight = 40.sp
+                        ),
+                        color = MaterialTheme.colorScheme.tertiary,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(50.dp))
+
+            Image(
+                painter = painterResource(id = R.drawable.logo),
+                contentDescription = "Logo Naisor Studio",
+                modifier = Modifier.size(44.dp)
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = "Naisor Studio © 2026",
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium
+                ),
+                color = MaterialTheme.colorScheme.outline
+            )
+            Text(
+                text = "v${ConfigApp.VERSION_LOCAL}",
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Light
+                ),
+                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.7f)
+            )
+        }
+    }
+}
 
 @Preview(showBackground = true)
 @Composable
 fun CronogramaPreview() {
     StorylineAnniversaryTheme {
-        CronogramaApp()
+        InterfazSegunVersion()
     }
 }

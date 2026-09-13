@@ -25,6 +25,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
@@ -84,14 +85,12 @@ fun PantallaMomentos(
     onVolver: () -> Unit
 ) {
     val context = LocalContext.current
-    var listaMomentos by remember { mutableStateOf(obtenerTodosLosMomentos(context)) }
+    var listaMomentos by remember { mutableStateOf(obtenerTodosLosMomentosApp(context)) }
 
-    // Conjunto de IDs seleccionados
     var idsSeleccionados by remember { mutableStateOf(setOf<Int>()) }
     val modoSeleccionActivo = idsSeleccionados.isNotEmpty()
-
-    // Índice de la foto seleccionada para el visor (-1 significa cerrado)
     var indiceFotoSeleccionada by remember { mutableIntStateOf(-1) }
+    var mostrarDialogoCollage by remember { mutableStateOf(false) }
 
     val todosSeleccionados = listaMomentos.isNotEmpty() && idsSeleccionados.size == listaMomentos.size
 
@@ -124,7 +123,6 @@ fun PantallaMomentos(
                 actions = {
                     if (listaMomentos.isNotEmpty()) {
                         if (modoSeleccionActivo) {
-                            // Botón Seleccionar Todo / Desmarcar Todo
                             IconButton(
                                 onClick = {
                                     idsSeleccionados = if (todosSeleccionados) {
@@ -141,16 +139,15 @@ fun PantallaMomentos(
                                 )
                             }
 
-                            // Botón Borrar Selección (Habilitado únicamente si hay mínimo 1 foto seleccionada)
                             IconButton(
                                 enabled = idsSeleccionados.isNotEmpty(),
                                 onClick = {
                                     val cantidadABorrar = idsSeleccionados.size
                                     idsSeleccionados.forEach { id ->
-                                        borrarFotoDePrefs(context, id)
+                                        borrarFotoDePrefsApp(context, id)
                                     }
                                     idsSeleccionados = emptySet()
-                                    listaMomentos = obtenerTodosLosMomentos(context)
+                                    listaMomentos = obtenerTodosLosMomentosApp(context)
                                     Toast.makeText(context, "$cantidadABorrar foto(s) eliminada(s)", Toast.LENGTH_SHORT).show()
                                 }
                             ) {
@@ -161,10 +158,19 @@ fun PantallaMomentos(
                                 )
                             }
                         } else {
-                            // Descargar todas las fotos
+                            IconButton(
+                                onClick = { mostrarDialogoCollage = true }
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.AutoAwesome,
+                                    contentDescription = "Crear Collage",
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            }
+
                             IconButton(
                                 onClick = {
-                                    exportarTodasLasFotosAGaleria(context, listaMomentos)
+                                    exportarTodasLasFotosAGaleriaApp(context, listaMomentos)
                                 }
                             ) {
                                 Icon(
@@ -222,14 +228,12 @@ fun PantallaMomentos(
                             modoSeleccionActivo = modoSeleccionActivo,
                             onClickFoto = {
                                 if (modoSeleccionActivo) {
-                                    // Si el modo selección está activo, tocar selecciona/desselecciona
                                     idsSeleccionados = if (esSeleccionado) {
                                         idsSeleccionados - momento.idActividad
                                     } else {
                                         idsSeleccionados + momento.idActividad
                                     }
                                 } else {
-                                    // Si no hay modo selección, abre el visor individual
                                     val idx = listaMomentos.indexOf(momento)
                                     if (idx != -1) {
                                         indiceFotoSeleccionada = idx
@@ -237,7 +241,6 @@ fun PantallaMomentos(
                                 }
                             },
                             onLongClickFoto = {
-                                // MANTENER PRESIONADO ACTIVA EL MODO SELECCIÓN
                                 idsSeleccionados = if (esSeleccionado) {
                                     idsSeleccionados - momento.idActividad
                                 } else {
@@ -245,13 +248,13 @@ fun PantallaMomentos(
                                 }
                             },
                             onExportar = {
-                                exportarFotoAGaleria(context, momento.uri)
+                                exportarFotoAGaleriaApp(context, momento.uri)
                                 Toast.makeText(context, "Foto guardada en galería", Toast.LENGTH_SHORT).show()
                             },
                             onBorrar = {
-                                borrarFotoDePrefs(context, momento.idActividad)
+                                borrarFotoDePrefsApp(context, momento.idActividad)
                                 idsSeleccionados = idsSeleccionados - momento.idActividad
-                                listaMomentos = obtenerTodosLosMomentos(context)
+                                listaMomentos = obtenerTodosLosMomentosApp(context)
                                 Toast.makeText(context, "Foto eliminada de la app", Toast.LENGTH_SHORT).show()
                             }
                         )
@@ -309,7 +312,7 @@ fun PantallaMomentos(
                             }
                         }
 
-                        // Barra Superior Visor
+                        // Top bar
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -346,7 +349,7 @@ fun PantallaMomentos(
                             }
                         }
 
-                        // Barra Inferior Visor
+                        // Bottom bar
                         momentoActual?.let { momento ->
                             Row(
                                 modifier = Modifier
@@ -359,7 +362,7 @@ fun PantallaMomentos(
                             ) {
                                 OutlinedButton(
                                     onClick = {
-                                        if (exportarFotoAGaleria(context, momento.uri)) {
+                                        if (exportarFotoAGaleriaApp(context, momento.uri)) {
                                             Toast.makeText(context, "Foto guardada en galería", Toast.LENGTH_SHORT).show()
                                         }
                                     }
@@ -377,8 +380,8 @@ fun PantallaMomentos(
                                 IconButton(
                                     onClick = {
                                         val idABorrar = momento.idActividad
-                                        borrarFotoDePrefs(context, idABorrar)
-                                        listaMomentos = obtenerTodosLosMomentos(context)
+                                        borrarFotoDePrefsApp(context, idABorrar)
+                                        listaMomentos = obtenerTodosLosMomentosApp(context)
 
                                         if (listaMomentos.isEmpty()) {
                                             indiceFotoSeleccionada = -1
@@ -396,6 +399,18 @@ fun PantallaMomentos(
                         }
                     }
                 }
+            }
+
+            // --- DIÁLOGO CREAR COLLAGE ---
+            if (mostrarDialogoCollage) {
+                CollageDialog(
+                    fotosUris = listaMomentos.map { it.uri },
+                    onDismiss = { mostrarDialogoCollage = false },
+                    onCollageGuardado = {
+                        mostrarDialogoCollage = false
+                        listaMomentos = obtenerTodosLosMomentosApp(context)
+                    }
+                )
             }
         }
     }
@@ -431,7 +446,6 @@ fun TarjetaMomento(
                 contentScale = ContentScale.Crop
             )
 
-            // Capa azulada de fondo únicamente si la tarjeta está seleccionada
             if (esSeleccionado) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
@@ -439,7 +453,6 @@ fun TarjetaMomento(
                 ) {}
             }
 
-            // SÓLO se muestran los círculos de check SI el modo selección está activo (tras presionar prolongadamente)
             if (modoSeleccionActivo) {
                 Box(
                     modifier = Modifier
@@ -458,7 +471,6 @@ fun TarjetaMomento(
                 }
             }
 
-            // Pie de la tarjeta con información e íconos rápidos (solo visibles fuera del modo selección)
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -502,18 +514,29 @@ fun TarjetaMomento(
     }
 }
 
-// Helpers de Datos
-fun obtenerTodosLosMomentos(context: Context): List<MomentoFoto> {
+// Helpers locales renombrados para evitar colisiones con CollageUtils.kt
+
+private fun obtenerFotoUriDePrefsApp(context: Context, idActividad: Int): Uri? {
+    val prefs = context.getSharedPreferences("storyline_prefs", Context.MODE_PRIVATE)
+    val uriString = prefs.getString("foto_actividad_$idActividad", null)
+    return uriString?.let { Uri.parse(it) }
+}
+
+fun obtenerTodosLosMomentosApp(context: Context): List<MomentoFoto> {
     val titulosDefault = mapOf(
-        1 to "Preparar café y revisar pendientes",
-        2 to "Avanzar en el código de la aplicación",
-        3 to "Diseño de interfaz y pruebas en Android",
-        4 to "Tiempo libre / Descanso"
+        1 to "Desayunar con el amor de mi vida",
+        2 to "Caminar con mi princesa preciosa en el valle escondido",
+        3 to "El mejor almuerzo con mi esposa preciosa",
+        4 to "Viajar con mi reina hermosa para tierras altas",
+        5 to "Paseo en dualbicicleta con mi alma gemela",
+        6 to "Viaje con mi muñequita hermosa hacia…",
+        7 to "… la playa la Barquete para ver el atardecer",
+        8 to "Cerrar con broche de oro, comer la pizza favorita de mi amada preciosa"
     )
 
     val momentos = mutableListOf<MomentoFoto>()
-    for (id in 1..4) {
-        val uri = obtenerFotoUriDePrefs(context, id)
+    for (id in 1..8) {
+        val uri = obtenerFotoUriDePrefsApp(context, id)
         if (uri != null) {
             momentos.add(
                 MomentoFoto(
@@ -527,12 +550,12 @@ fun obtenerTodosLosMomentos(context: Context): List<MomentoFoto> {
     return momentos
 }
 
-fun borrarFotoDePrefs(context: Context, idActividad: Int) {
+fun borrarFotoDePrefsApp(context: Context, idActividad: Int) {
     val prefs = context.getSharedPreferences("storyline_prefs", Context.MODE_PRIVATE)
     prefs.edit().remove("foto_actividad_$idActividad").apply()
 }
 
-fun exportarFotoAGaleria(context: Context, uriOriginal: Uri): Boolean {
+fun exportarFotoAGaleriaApp(context: Context, uriOriginal: Uri): Boolean {
     return try {
         val resolver = context.contentResolver
         val inputStream: InputStream? = resolver.openInputStream(uriOriginal)
@@ -564,10 +587,10 @@ fun exportarFotoAGaleria(context: Context, uriOriginal: Uri): Boolean {
     }
 }
 
-fun exportarTodasLasFotosAGaleria(context: Context, listaMomentos: List<MomentoFoto>) {
+fun exportarTodasLasFotosAGaleriaApp(context: Context, listaMomentos: List<MomentoFoto>) {
     var exitosas = 0
     for (momento in listaMomentos) {
-        if (exportarFotoAGaleria(context, momento.uri)) {
+        if (exportarFotoAGaleriaApp(context, momento.uri)) {
             exitosas++
         }
     }
